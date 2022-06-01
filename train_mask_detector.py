@@ -22,10 +22,11 @@ import os
 
 # 20 эпох
 EPOCHS = 20
-# коэффициент скорости обучения - отвечает за величину коррекции весов
+# коэффициент скорости обучения
+# отвечает за величину коррекции весов (с каждой новой эпохой задаем разные веса)
 INIT_LR = 1e-4
-# разрем одного батча
-# батч - часть датасета, что бы прогонять в одной эпохе веь датасет по частям
+# размер одного батча
+# батч - часть датасета, что бы прогонять в одной эпохе весь датасет по частям
 BS = 32
 
 DIRECTORY = r"D:\dev\python\face-mask-detection\dataset"
@@ -46,7 +47,7 @@ for category in CATEGORIES:
         data.append(image)
         labels.append(category)
 
-# готовим нейронку
+# перевожу категории в бинарный вид
 lb = LabelBinarizer()
 labels = lb.fit_transform(labels)
 labels = to_categorical(labels)
@@ -67,11 +68,12 @@ aug = ImageDataGenerator(
     horizontal_flip=True,
     fill_mode="nearest")
 
-# настраиваю модель перед обучением
-# настраиваем input нейронки
+# загружю MobileNetV2 (сеть для компьютерного зрения)
+# убедившись, что набор верхних уровней отключен
 baseModel = MobileNetV2(weights="imagenet", include_top=False,
     input_tensor=Input(shape=(224, 224, 3)))
 
+# строю вершину сети (та часть, через которую поступают данные)
 headModel = baseModel.output
 headModel = AveragePooling2D(pool_size=(7, 7))(headModel)
 headModel = Flatten(name="flatten")(headModel)
@@ -79,17 +81,19 @@ headModel = Dense(128, activation="relu")(headModel)
 headModel = Dropout(0.5)(headModel)
 headModel = Dense(2, activation="softmax")(headModel)
 
+# размещаю вершину модели над базовой моделью
 model = Model(inputs=baseModel.input, outputs=headModel)
 
 for layer in baseModel.layers:
     layer.trainable = False
 
+# собираю модель
 print("[INFO] compiling model...")
 opt = Adam(lr=INIT_LR, decay=INIT_LR / EPOCHS)
 model.compile(loss="binary_crossentropy", optimizer=opt,
     metrics=["accuracy"])
 
-# обучение
+# обучаем верхушку сети
 print("[INFO] training head...")
 H = model.fit(
     aug.flow(trainX, trainY, batch_size=BS),
@@ -98,23 +102,31 @@ H = model.fit(
     validation_steps=len(testX) // BS,
     epochs=EPOCHS)
 
+# делаем предположения на тестовом датасете
 print("[INFO] evaluating network...")
 predIdxs = model.predict(testX, batch_size=BS)
 
+# для каждого изображения нужно найти индекс категории 
+# с соответствующей наибольшей прогнозируемой вероятностью
 predIdxs = np.argmax(predIdxs, axis=1)
 
+# красиво выводим отчет о классификации
 print(classification_report(testY.argmax(axis=1), predIdxs,
     target_names=lb.classes_))
 
+# сохраняем модель на диск
 print("[INFO] saving mask detector model...")
 model.save("mask_detector.model", save_format="h5")
 
 # вывожу график обучения
+# строим график ощибки и точности обучения
 N = EPOCHS
 plt.style.use("ggplot")
 plt.figure()
+# ошибки в обучении
 plt.plot(np.arange(0, N), H.history["loss"], label="train_loss")
 plt.plot(np.arange(0, N), H.history["val_loss"], label="val_loss")
+# точность обучения
 plt.plot(np.arange(0, N), H.history["accuracy"], label="train_acc")
 plt.plot(np.arange(0, N), H.history["val_accuracy"], label="val_acc")
 plt.title("Training Loss and Accuracy")
